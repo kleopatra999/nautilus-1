@@ -28,21 +28,46 @@
 
 #define               UPDATE_STATUS_TIMEOUT  200 //ms
 
+typedef enum
+{
+  MODE_NO_SELECTION,
+  MODE_FILES_ONLY,
+  MODE_FOLDERS_ONLY,
+  MODE_MIXED
+} ActionBarMode;
+
 struct _NautilusActionBar
 {
   GtkFrame            parent;
 
-  GtkWidget          *file_name_label;
-  GtkWidget          *file_size_label;
   GtkWidget          *loading_label;
-  GtkWidget          *multi_selection_label;
-  GtkWidget          *paste_button;
-  GtkWidget          *preview_button;
-  GtkWidget          *preview_icon;
   GtkWidget          *stack;
 
+  /* No selection buttons */
+  GtkWidget          *new_folder_0_button;
+  GtkWidget          *paste_button;
+  GtkWidget          *select_all_button;
+  GtkWidget          *no_selection_separator;
+  GtkWidget          *bookmark_button;
+  GtkWidget          *properties_0_button;
+  GtkWidget          *no_selection_overflow_button;
+  GtkWidget          *no_selection_folder_label;
+
+  /* Folders buttons */
+  GtkWidget          *open_file_box;
+  GtkWidget          *open_folders_button;
+  GtkWidget          *move_folders_button;
+  GtkWidget          *move_trash_folders_button;
+  GtkWidget          *copy_folders_button;
+  GtkWidget          *rename_folders_button;
+  GtkWidget          *folders_overflow_button;
+
+  GtkWidget          *no_selection_widgets    [5];
+  GtkWidget          *files_folders_widgets   [6];
+  GtkWidget          *mixed_selection_widgets [5];
+
   NautilusView       *view;
-  gboolean            show_thumbnail;
+  ActionBarMode       mode;
   gint                update_status_timeout_id;
 };
 
@@ -50,43 +75,9 @@ G_DEFINE_TYPE (NautilusActionBar, nautilus_action_bar, GTK_TYPE_FRAME)
 
 enum {
   PROP_0,
-  PROP_SHOW_THUMBNAIL,
   PROP_VIEW,
   N_PROPS
 };
-
-static void
-open_preview_cb (NautilusActionBar *actionbar)
-{
-  GtkWidget *toplevel;
-  GdkWindow *window;
-  GList *selection;
-  gchar *uri;
-  guint xid;
-
-  xid = 0;
-  uri = NULL;
-  selection = nautilus_view_get_selection (actionbar->view);
-
-  /* Only preview if exact 1 file is selected */
-  if (g_list_length (selection) != 1)
-    goto out;
-
-  uri = nautilus_file_get_uri (selection->data);
-  toplevel = gtk_widget_get_toplevel (GTK_WIDGET (actionbar));
-
-#ifdef GDK_WINDOWING_X11
-        window = gtk_widget_get_window (toplevel);
-        if (GDK_IS_X11_WINDOW (window))
-          xid = gdk_x11_window_get_xid (gtk_widget_get_window (toplevel));
-#endif
-
-  nautilus_previewer_call_show_file (uri, xid, TRUE);
-
-out:
-  g_clear_pointer (&selection, nautilus_file_list_free);
-  g_clear_pointer (&uri, g_free);
-}
 
 static void
 update_paste_button (NautilusActionBar *self)
@@ -118,277 +109,29 @@ update_paste_button (NautilusActionBar *self)
 }
 
 static void
-setup_multiple_files_selection (NautilusActionBar *actionbar,
-                                GList             *selection)
+set_internal_mode (NautilusActionBar *self,
+                   ActionBarMode      mode)
 {
-  NautilusFile *file;
-  goffset non_folder_size;
-  gboolean non_folder_size_known;
-  guint non_folder_count, folder_count, folder_item_count;
-  gboolean folder_item_count_known;
-  guint file_item_count;
-  GList *p;
-  char *first_item_name;
-  char *non_folder_count_str;
-  char *non_folder_item_count_str;
-  char *folder_count_str;
-  char *folder_item_count_str;
-  char *status;
+  self->mode = mode;
 
-  folder_item_count_known = TRUE;
-  folder_count = 0;
-  folder_item_count = 0;
-  non_folder_count = 0;
-  non_folder_size_known = FALSE;
-  non_folder_size = 0;
-  first_item_name = NULL;
-  folder_count_str = NULL;
-  folder_item_count_str = NULL;
-  non_folder_count_str = NULL;
-  non_folder_item_count_str = NULL;
-
-  for (p = selection; p != NULL; p = p->next)
+  switch (mode)
     {
-      file = p->data;
+    case MODE_NO_SELECTION:
+      gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "no-selection");
+      break;
 
-      if (nautilus_file_is_directory (file))
-        {
-          folder_count++;
+    case MODE_FILES_ONLY:
+      gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "files-folders");
+      break;
 
-          if (nautilus_file_get_directory_item_count (file, &file_item_count, NULL))
-            folder_item_count += file_item_count;
-          else
-            folder_item_count_known = FALSE;
-        }
-      else
-        {
-          non_folder_count++;
+    case MODE_FOLDERS_ONLY:
+      gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "files-folders");
+      break;
 
-          if (!nautilus_file_can_get_size (file))
-            {
-              non_folder_size_known = TRUE;
-              non_folder_size += nautilus_file_get_size (file);
-            }
-        }
-
-      if (first_item_name == NULL)
-        first_item_name = nautilus_file_get_display_name (file);
+    case MODE_MIXED:
+      gtk_stack_set_visible_child_name (GTK_STACK (self->stack), "files-folders");
+      break;
     }
-
-  nautilus_file_list_free (selection);
-
-  /*
-   * Break out cases for localization's sake. But note that there are still pieces
-   * being assembled in a particular order, which may be a problem for some localizers.
-   */
-  if (folder_count != 0)
-    {
-      if (folder_count == 1 && non_folder_count == 0)
-        {
-          folder_count_str = g_strdup_printf (_("“%s” selected"), first_item_name);
-        }
-      else
-        {
-          folder_count_str = g_strdup_printf (ngettext("%'d folder selected",
-                                                       "%'d folders selected",
-                                                       folder_count),
-                                              folder_count);
-        }
-
-      if (folder_count == 1)
-        {
-          if (!folder_item_count_known)
-            folder_item_count_str = g_strdup ("");
-          else
-            folder_item_count_str = g_strdup_printf (ngettext("(containing %'d item)", "(containing %'d items)", folder_item_count),
-                                                     folder_item_count);
-        }
-      else
-        {
-          if (!folder_item_count_known)
-            {
-              folder_item_count_str = g_strdup ("");
-            }
-          else
-            {
-              /* translators: this is preceded with a string of form 'N folders' (N more than 1) */
-              folder_item_count_str = g_strdup_printf (ngettext("(containing a total of %'d item)",
-                                                                "(containing a total of %'d items)",
-                                                                folder_item_count),
-                                                       folder_item_count);
-            }
-        }
-    }
-
-  if (non_folder_count != 0)
-    {
-      if (folder_count == 0)
-        {
-          if (non_folder_count == 1) {
-                  non_folder_count_str = g_strdup_printf (_("“%s” selected"), first_item_name);
-          } else {
-                  non_folder_count_str = g_strdup_printf (ngettext("%'d item selected",
-                                                                   "%'d items selected",
-                                                                   non_folder_count),
-                                                          non_folder_count);
-          }
-        }
-      else
-        {
-          /* Folders selected also, use "other" terminology */
-          non_folder_count_str = g_strdup_printf (ngettext("%'d other item selected",
-                                                           "%'d other items selected",
-                                                           non_folder_count),
-                                                  non_folder_count);
-        }
-
-      if (non_folder_size_known)
-        {
-          char *size_string;
-
-          size_string = g_format_size (non_folder_size);
-          /* This is marked for translation in case a localiser
-           * needs to use something other than parentheses. The
-           * the message in parentheses is the size of the selected items.
-           */
-          non_folder_item_count_str = g_strdup_printf (_("(%s)"), size_string);
-          g_free (size_string);
-        }
-      else
-        {
-          non_folder_item_count_str = g_strdup ("");
-        }
-    }
-
-  if (folder_count == 0 && non_folder_count == 0)
-    {
-      status = NULL;
-    }
-  else if (folder_count == 0)
-    {
-      status = g_strdup_printf ("%s, %s", non_folder_count_str, non_folder_item_count_str);
-    }
-  else if (non_folder_count == 0)
-    {
-      status = g_strdup_printf ("%s %s", folder_count_str, folder_item_count_str);
-    }
-  else {
-          /* This is marked for translation in case a localizer
-           * needs to change ", " to something else. The comma
-           * is between the message about the number of folders
-           * and the number of items in those folders and the
-           * message about the number of other items and the
-           * total size of those items.
-           */
-          status = g_strdup_printf (_("%s %s, %s %s"),
-                                    folder_count_str,
-                                    folder_item_count_str,
-                                    non_folder_count_str,
-                                    non_folder_item_count_str);
-  }
-
-  gtk_label_set_label (GTK_LABEL (actionbar->multi_selection_label), status);
-  gtk_stack_set_visible_child_name (GTK_STACK (actionbar->stack), "multi-selection");
-
-  g_free (first_item_name);
-  g_free (folder_count_str);
-  g_free (folder_item_count_str);
-  g_free (non_folder_count_str);
-  g_free (non_folder_item_count_str);
-  g_free (status);
-}
-
-static void
-setup_single_file_selection (NautilusActionBar *actionbar,
-                             NautilusFile      *file)
-{
-  gboolean is_directory, sensitive;
-  gchar *thumbnail_path;
-  gchar *description;
-
-  description = NULL;
-  is_directory = nautilus_file_is_directory (file);
-
-  /* Setup the thumbnail icon */
-  thumbnail_path = nautilus_file_get_thumbnail_path (file);
-
-  if (thumbnail_path && actionbar->show_thumbnail)
-    {
-      GtkStyleContext *context;
-      GdkPixbuf *thumbnail;
-      gint border_top, border_bottom;
-      gint height;
-
-      context = gtk_widget_get_style_context (actionbar->preview_button);
-
-      gtk_style_context_get (context,
-                             gtk_style_context_get_state (context),
-                             "border-top-width", &border_top,
-                             "border-bottom-width", &border_bottom,
-                             NULL);
-
-      sensitive = TRUE;
-      height = gtk_widget_get_allocated_height (actionbar->preview_button) - border_top - border_bottom;
-      thumbnail = gdk_pixbuf_new_from_file_at_size (thumbnail_path,
-                                                    -1,
-                                                    height,
-                                                    NULL);
-
-      gtk_image_set_from_pixbuf (GTK_IMAGE (actionbar->preview_icon), thumbnail);
-      gtk_widget_set_margin_start (actionbar->preview_button, 0);
-
-      g_clear_object (&thumbnail);
-    }
-  else
-    {
-      GIcon *icon;
-
-      sensitive = FALSE;
-      icon = nautilus_file_get_gicon (file, 0);
-
-      gtk_image_set_from_gicon (GTK_IMAGE (actionbar->preview_icon), icon, GTK_ICON_SIZE_DND);
-      gtk_widget_set_margin_start (actionbar->preview_button, 6);
-
-      g_clear_object (&icon);
-    }
-
-
-  /* We don't want to preview folders */
-  gtk_widget_set_sensitive (actionbar->preview_button, sensitive && !is_directory);
-
-  /* Primary label is the file name */
-  gtk_label_set_label (GTK_LABEL (actionbar->file_name_label), nautilus_file_get_display_name (file));
-
-  /*
-   * If the selected item is a folder, display the number of
-   * children. Otherwise, display the file size.
-   */
-  if (is_directory)
-    {
-      guint folder_children;
-
-      if (nautilus_file_get_directory_item_count (file, &folder_children, NULL))
-        {
-          description = g_strdup_printf (ngettext("Contains %'d item", "Contains %'d items", folder_children),
-                                         folder_children);
-        }
-    }
-  else
-    {
-      description = g_format_size (nautilus_file_get_size (file));
-    }
-
-  /*
-   * If there is no description available, we hide the second label so
-   * the filename is vertically centralized against the icon.
-   */
-  gtk_widget_set_visible (actionbar->file_size_label, description != NULL);
-  gtk_label_set_label (GTK_LABEL (actionbar->file_size_label), description ? description : "");
-
-  gtk_stack_set_visible_child_name (GTK_STACK (actionbar->stack), "single-selection");
-
-  g_clear_pointer (&description, g_free);
-  g_clear_pointer (&file, nautilus_file_unref);
 }
 
 static gboolean
@@ -405,18 +148,29 @@ real_update_status (gpointer data)
     }
   else
     {
-      GList *selection;
-      gint number_of_files;
+      GList *selection, *l;
+      gint number_of_files, number_of_folders;
 
       selection = nautilus_view_get_selection (actionbar->view);
-      number_of_files = g_list_length (selection);
+      number_of_files = number_of_folders = 0;
 
-      if (number_of_files == 0)
-        gtk_stack_set_visible_child_name (GTK_STACK (actionbar->stack), "normal");
-      else if (number_of_files == 1)
-        setup_single_file_selection (actionbar, selection->data);
+      /* Count the number of selected files and folders */
+      for (l = selection; l != NULL; l = l->next)
+        {
+          if (nautilus_file_is_directory (l->data))
+            number_of_folders++;
+          else
+            number_of_files++;
+        }
+
+      if (number_of_files > 0 && number_of_folders > 0)
+        set_internal_mode (actionbar, MODE_MIXED);
+      else if (number_of_files > 0)
+        set_internal_mode (actionbar, MODE_FILES_ONLY);
+      else if (number_of_folders > 0)
+        set_internal_mode (actionbar, MODE_FOLDERS_ONLY);
       else
-        setup_multiple_files_selection (actionbar, selection);
+        set_internal_mode (actionbar, MODE_NO_SELECTION);
     }
 
   actionbar->update_status_timeout_id = 0;
@@ -436,6 +190,25 @@ update_status (NautilusActionBar *actionbar)
   actionbar->update_status_timeout_id = g_timeout_add (UPDATE_STATUS_TIMEOUT,
                                                        real_update_status,
                                                        actionbar);
+}
+
+static void
+location_changed_cb (NautilusActionBar *self)
+{
+  NautilusFile *file;
+  gchar *display_name;
+
+  file = nautilus_file_get (nautilus_view_get_location (self->view));
+
+  if (nautilus_file_is_home (file))
+    display_name = g_strdup (_("Home"));
+  else
+    display_name = nautilus_file_get_display_name (file);
+
+  gtk_label_set_label (GTK_LABEL (self->no_selection_folder_label), display_name);
+
+  g_clear_pointer (&file, nautilus_file_unref);
+  g_free (display_name);
 }
 
 static void
@@ -467,10 +240,6 @@ nautilus_action_bar_get_property (GObject    *object,
 
   switch (prop_id)
     {
-    case PROP_SHOW_THUMBNAIL:
-      g_value_set_boolean (value, self->show_thumbnail);
-      break;
-
     case PROP_VIEW:
       g_value_set_object (value, self->view);
       break;
@@ -490,13 +259,10 @@ nautilus_action_bar_set_property (GObject      *object,
 
   switch (prop_id)
     {
-    case PROP_SHOW_THUMBNAIL:
-      nautilus_action_bar_set_show_thumbnail (self, g_value_get_boolean (value));
-      break;
-
     case PROP_VIEW:
       if (g_set_object (&self->view, g_value_get_object (value)))
         {
+          g_signal_connect_swapped (self->view, "notify::location", G_CALLBACK (location_changed_cb), self);
           g_signal_connect_swapped (self->view, "notify::selection", G_CALLBACK (update_status), self);
           g_signal_connect_swapped (self->view, "notify::is-loading", G_CALLBACK (update_status), self);
           g_signal_connect_swapped (self->view, "notify::is-searching", G_CALLBACK (update_status), self);
@@ -511,6 +277,127 @@ nautilus_action_bar_set_property (GObject      *object,
 }
 
 static void
+nautilus_action_bar_size_allocate (GtkWidget     *widget,
+                                   GtkAllocation *allocation)
+{
+  NautilusActionBar *self;
+  GtkWidget **widgets;
+  GtkWidget *overflow_button;
+  gint max_items, visible_items, button_width, overflow_width;
+  gint max_width;
+  gint i, start;
+
+  self = NAUTILUS_ACTION_BAR (widget);
+  max_width = 2 * allocation->width / 3 - 2 * gtk_container_get_border_width (GTK_CONTAINER (self->stack));
+  start = 0;
+
+  switch (self->mode)
+    {
+    case MODE_NO_SELECTION:
+      overflow_button = self->no_selection_overflow_button;
+      widgets = self->no_selection_widgets;
+      max_items = 5;
+
+      gtk_widget_get_preferred_width (self->new_folder_0_button, &button_width, NULL);
+      gtk_widget_get_preferred_width (overflow_button, &overflow_width, NULL);
+
+      visible_items = CLAMP ((max_width - overflow_width) / button_width, 0, max_items);
+
+      /* Hide the separator if needed */
+      gtk_widget_set_visible (self->no_selection_separator, visible_items > 3);
+      break;
+
+    case MODE_FILES_ONLY:
+      overflow_button = self->folders_overflow_button;
+      widgets = self->files_folders_widgets;
+      max_items = 6;
+      start = 2;
+
+      gtk_widget_get_preferred_width (self->move_folders_button, &button_width, NULL);
+
+      visible_items = CLAMP (max_width / button_width, 0, max_items);
+
+      gtk_widget_show (widgets[0]);
+      gtk_widget_hide (widgets[1]);
+      break;
+
+    case MODE_FOLDERS_ONLY:
+      overflow_button = self->folders_overflow_button;
+      widgets = self->files_folders_widgets;
+      max_items = 6;
+      start = 1;
+
+      gtk_widget_get_preferred_width (self->move_folders_button, &button_width, NULL);
+
+      visible_items = CLAMP (max_width / button_width, 0, max_items);
+      gtk_widget_hide (widgets[0]);
+      break;
+
+    case MODE_MIXED:
+      overflow_button = self->folders_overflow_button;
+      widgets = self->files_folders_widgets;
+      max_items = 6;
+      start = 2;
+
+      gtk_widget_get_preferred_width (self->move_folders_button, &button_width, NULL);
+
+      visible_items = CLAMP (max_width / button_width, 0, max_items);
+
+      gtk_widget_hide (widgets[0]);
+      gtk_widget_hide (widgets[1]);
+      break;
+    }
+
+  for (i = start; i < max_items; i++)
+    {
+      g_message ("widget %p is visible: %d", widgets[i], i < visible_items);
+      gtk_widget_set_visible (widgets[i], i < visible_items);
+    }
+
+  gtk_widget_set_visible (overflow_button, visible_items < max_items);
+
+  GTK_WIDGET_CLASS (nautilus_action_bar_parent_class)->size_allocate (widget, allocation);
+}
+
+static void
+nautilus_action_bar_get_preferred_width (GtkWidget *widget,
+                                         gint      *minimum,
+                                         gint      *natural)
+{
+  NautilusActionBar *self;
+  gint button_width;
+
+  self = NAUTILUS_ACTION_BAR (widget);
+
+  switch (self->mode)
+    {
+    case MODE_NO_SELECTION:
+      gtk_widget_get_preferred_width (self->new_folder_0_button, &button_width, NULL);
+      break;
+
+    case MODE_FILES_ONLY:
+      break;
+
+    case MODE_FOLDERS_ONLY:
+      gtk_widget_get_preferred_width (self->open_folders_button, &button_width, NULL);
+      break;
+
+    case MODE_MIXED:
+      break;
+    }
+
+  button_width += 2 * gtk_container_get_border_width (GTK_CONTAINER (self->stack));
+
+  if (minimum)
+    *minimum = button_width;
+
+  if (natural)
+    *natural = button_width;
+
+  g_message ("%s\t%d", G_STRFUNC, button_width);
+}
+
+static void
 nautilus_action_bar_class_init (NautilusActionBarClass *klass)
 {
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
@@ -520,18 +407,8 @@ nautilus_action_bar_class_init (NautilusActionBarClass *klass)
   object_class->get_property = nautilus_action_bar_get_property;
   object_class->set_property = nautilus_action_bar_set_property;
 
-  /**
-   * NautilusActionBar::show-thumbnail:
-   *
-   * Whether the view shows the available thumbnails.
-   */
-  g_object_class_install_property (object_class,
-                                   PROP_SHOW_THUMBNAIL,
-                                   g_param_spec_boolean ("show-thumbnail",
-                                                         "Whether the view shows thumbnails",
-                                                         "Whether the view shows thumbnails or not",
-                                                         TRUE,
-                                                         G_PARAM_READWRITE));
+  widget_class->size_allocate = nautilus_action_bar_size_allocate;
+  widget_class->get_preferred_width = nautilus_action_bar_get_preferred_width;
 
   /**
    * NautilusActionBar::view:
@@ -548,16 +425,23 @@ nautilus_action_bar_class_init (NautilusActionBarClass *klass)
 
   gtk_widget_class_set_template_from_resource (widget_class, "/org/gnome/nautilus/ui/nautilus-action-bar.ui");
 
-  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, file_name_label);
-  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, file_size_label);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, bookmark_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, copy_folders_button);
   gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, loading_label);
-  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, multi_selection_label);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, folders_overflow_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, move_folders_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, move_trash_folders_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, new_folder_0_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, no_selection_folder_label);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, no_selection_overflow_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, no_selection_separator);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, open_file_box);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, open_folders_button);
   gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, paste_button);
-  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, preview_button);
-  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, preview_icon);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, properties_0_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, rename_folders_button);
+  gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, select_all_button);
   gtk_widget_class_bind_template_child (widget_class, NautilusActionBar, stack);
-
-  gtk_widget_class_bind_template_callback (widget_class, open_preview_cb);
 
   gtk_widget_class_set_css_name (widget_class, "actionbar");
 }
@@ -565,9 +449,22 @@ nautilus_action_bar_class_init (NautilusActionBarClass *klass)
 static void
 nautilus_action_bar_init (NautilusActionBar *self)
 {
-  self->show_thumbnail = TRUE;
-
   gtk_widget_init_template (GTK_WIDGET (self));
+
+  /* No selection widgets */
+  self->no_selection_widgets[0] = self->new_folder_0_button;
+  self->no_selection_widgets[1] = self->paste_button;
+  self->no_selection_widgets[2] = self->select_all_button;
+  self->no_selection_widgets[3] = self->bookmark_button;
+  self->no_selection_widgets[4] = self->properties_0_button;
+
+  /* Folder- and folder-only widgets */
+  self->files_folders_widgets[0] = self->open_file_box;
+  self->files_folders_widgets[1] = self->open_folders_button;
+  self->files_folders_widgets[2] = self->move_folders_button;
+  self->files_folders_widgets[3] = self->copy_folders_button;
+  self->files_folders_widgets[4] = self->rename_folders_button;
+  self->files_folders_widgets[5] = self->move_trash_folders_button;
 
   update_paste_button (self);
 
@@ -589,25 +486,4 @@ nautilus_action_bar_new (NautilusView *view)
   return g_object_new (NAUTILUS_TYPE_ACTION_BAR,
                        "view", view,
                        NULL);
-}
-
-/**
- * nautilus_action_bar_set_show_thumbnail:
- * @actionbar: a #NautilusActionBar
- * @show_thumbnail: %TRUE if it shows available thumbnails, %FALSE otherwise
- *
- * Sets whether @actionbar should show the thumbnail or not.
- */
-void
-nautilus_action_bar_set_show_thumbnail (NautilusActionBar *actionbar,
-                                        gboolean           show_thumbnail)
-{
-  g_return_if_fail (NAUTILUS_IS_ACTION_BAR (actionbar));
-
-  if (actionbar->show_thumbnail != show_thumbnail)
-    {
-      actionbar->show_thumbnail = show_thumbnail;
-
-      g_object_notify (G_OBJECT (actionbar), "show-thumbnail");
-    }
 }
